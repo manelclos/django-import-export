@@ -2,10 +2,12 @@ from __future__ import with_statement
 
 from datetime import datetime
 
+import importlib
 import django
 from django.contrib import admin
+from django.utils import six
 from django.utils.translation import ugettext_lazy as _
-from django.conf.urls import patterns, url
+from django.conf.urls import url
 from django.template.response import TemplateResponse
 from django.contrib import messages
 from django.contrib.admin.models import LogEntry, ADDITION, CHANGE, DELETION
@@ -13,6 +15,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.http import HttpResponseRedirect, HttpResponse
 from django.core.urlresolvers import reverse
 from django.conf import settings
+from django.template.defaultfilters import pluralize
 
 from .forms import (
     ImportForm,
@@ -33,11 +36,25 @@ except ImportError:
     from django.utils.encoding import force_unicode as force_text
 
 SKIP_ADMIN_LOG = getattr(settings, 'IMPORT_EXPORT_SKIP_ADMIN_LOG', False)
+TMP_STORAGE_CLASS = getattr(settings, 'IMPORT_EXPORT_TMP_STORAGE_CLASS',
+                            TempFolderStorage)
+if isinstance(TMP_STORAGE_CLASS, six.string_types):
+    try:
+        # Nod to tastypie's use of importlib.
+        parts = TMP_STORAGE_CLASS.split('.')
+        module_path, class_name = '.'.join(parts[:-1]), parts[-1]
+        module = importlib.import_module(module_path)
+        TMP_STORAGE_CLASS = getattr(module, class_name)
+    except ImportError as e:
+        msg = "Could not import '%s' for import_export setting 'IMPORT_EXPORT_TMP_STORAGE_CLASS'" % TMP_STORAGE_CLASS
+        raise ImportError(msg)
 
-#: import / export formats
+#: These are the default formats for import and export. Whether they can be
+#: used or not is depending on their implementation in the tablib library.
 DEFAULT_FORMATS = (
     base_formats.CSV,
     base_formats.XLS,
+    base_formats.XLSX,
     base_formats.TSV,
     base_formats.ODS,
     base_formats.JSON,
@@ -73,7 +90,7 @@ class ImportMixin(ImportExportMixinBase):
     from_encoding = "utf-8"
     skip_admin_log = None
     # storage class for saving temporary files
-    tmp_storage_class = TempFolderStorage
+    tmp_storage_class = None
 
     def get_skip_admin_log(self):
         if self.skip_admin_log is None:
@@ -81,18 +98,23 @@ class ImportMixin(ImportExportMixinBase):
         else:
             return self.skip_admin_log
 
+    def get_tmp_storage_class(self):
+        if self.tmp_storage_class is None:
+            return TMP_STORAGE_CLASS
+        else:
+            return self.tmp_storage_class
+
     def get_urls(self):
         urls = super(ImportMixin, self).get_urls()
         info = self.get_model_info()
-        my_urls = patterns(
-            '',
+        my_urls = [
             url(r'^process_import/$',
                 self.admin_site.admin_view(self.process_import),
                 name='%s_%s_process_import' % info),
             url(r'^import/$',
                 self.admin_site.admin_view(self.import_action),
                 name='%s_%s_import' % info),
-        )
+        ]
         return my_urls + urls
 
     def get_resource_class(self):
@@ -127,7 +149,7 @@ class ImportMixin(ImportExportMixinBase):
             input_format = import_formats[
                 int(confirm_form.cleaned_data['input_format'])
             ]()
-            tmp_storage = self.tmp_storage_class(name=confirm_form.cleaned_data['import_file_name'])
+            tmp_storage = self.get_tmp_storage_class()(name=confirm_form.cleaned_data['import_file_name'])
             data = tmp_storage.read(input_format.get_read_mode())
             if not input_format.is_binary() and self.from_encoding:
                 data = force_text(data, self.from_encoding)
@@ -157,7 +179,14 @@ class ImportMixin(ImportExportMixinBase):
                             change_message="%s through import_export" % row.import_type,
                         )
 
-            success_message = _('Import finished')
+            success_message = u'Import finished, with {} new {}{} and ' \
+                              u'{} updated {}{}.'.format(result.totals[RowResult.IMPORT_TYPE_NEW],
+                                                         opts.model_name,
+                                                         pluralize(result.totals[RowResult.IMPORT_TYPE_NEW]),
+                                                         result.totals[RowResult.IMPORT_TYPE_UPDATE],
+                                                         opts.model_name,
+                                                         pluralize(result.totals[RowResult.IMPORT_TYPE_UPDATE]))
+
             messages.success(request, success_message)
             tmp_storage.remove()
 
@@ -188,7 +217,7 @@ class ImportMixin(ImportExportMixinBase):
             import_file = form.cleaned_data['import_file']
             # first always write the uploaded file to disk as it may be a
             # memory file or else based on settings upload handlers
-            tmp_storage = self.tmp_storage_class()
+            tmp_storage = self.get_tmp_storage_class()()
             data = bytes()
             for chunk in import_file.chunks():
                 data += chunk
@@ -197,10 +226,15 @@ class ImportMixin(ImportExportMixinBase):
 
             # then read the file, using the proper format-specific mode
             # warning, big files may exceed memory
-            data = tmp_storage.read(input_format.get_read_mode())
-            if not input_format.is_binary() and self.from_encoding:
-                data = force_text(data, self.from_encoding)
-            dataset = input_format.create_dataset(data)
+            try:
+                data = tmp_storage.read(input_format.get_read_mode())
+                if not input_format.is_binary() and self.from_encoding:
+                    data = force_text(data, self.from_encoding)
+                dataset = input_format.create_dataset(data)
+            except UnicodeDecodeError as e:
+                return HttpResponse(_(u"<h1>Imported file has a wrong encoding: %s</h1>" % e))
+            except Exception as e:
+                return HttpResponse(_(u"<h1>%s encountered while trying to read file: %s</h1>" % (type(e).__name__, import_file.name)))
             result = resource.import_data(dataset, dry_run=True,
                                           raise_errors=False,
                                           file_name=import_file.name,
@@ -224,8 +258,9 @@ class ImportMixin(ImportExportMixinBase):
         context['opts'] = self.model._meta
         context['fields'] = [f.column_name for f in resource.get_fields()]
 
+        request.current_app = self.admin_site.name
         return TemplateResponse(request, [self.import_template_name],
-                                context, current_app=self.admin_site.name)
+                                context)
 
 
 class ExportMixin(ImportExportMixinBase):
@@ -238,19 +273,18 @@ class ExportMixin(ImportExportMixinBase):
     change_list_template = 'admin/import_export/change_list_export.html'
     #: template for export view
     export_template_name = 'admin/import_export/export.html'
-    #: available import formats
+    #: available export formats
     formats = DEFAULT_FORMATS
     #: export data encoding
     to_encoding = "utf-8"
 
     def get_urls(self):
         urls = super(ExportMixin, self).get_urls()
-        my_urls = patterns(
-            '',
+        my_urls = [
             url(r'^export/$',
                 self.admin_site.admin_view(self.export_action),
                 name='%s_%s_export' % self.get_model_info()),
-        )
+        ]
         return my_urls + urls
 
     def get_resource_class(self):
@@ -267,7 +301,7 @@ class ExportMixin(ImportExportMixinBase):
 
     def get_export_formats(self):
         """
-        Returns available import formats.
+        Returns available export formats.
         """
         return [f for f in self.formats if f().can_export()]
 
@@ -341,8 +375,9 @@ class ExportMixin(ImportExportMixinBase):
 
         context['form'] = form
         context['opts'] = self.model._meta
+        request.current_app = self.admin_site.name
         return TemplateResponse(request, [self.export_template_name],
-                                context, current_app=self.admin_site.name)
+                                context)
 
 
 class ImportExportMixin(ImportMixin, ExportMixin):
@@ -410,6 +445,9 @@ class ExportActionModelAdmin(ExportMixin, admin.ModelAdmin):
         'Export selected %(verbose_name_plural)s')
 
     actions = [export_admin_action]
+
+    class Media:
+        js = ['import_export/action_formats.js']
 
 
 class ImportExportActionModelAdmin(ImportMixin, ExportActionModelAdmin):

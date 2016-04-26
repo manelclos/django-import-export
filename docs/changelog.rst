@@ -1,10 +1,100 @@
-Changelog for django-import-export
-==================================
+Changelog
+=========
 
-0.2.8 (unreleased)
+0.4.6 (unreleased)
 ------------------
 
+-add **kwargs to export_data / create_dataset
+
+
+0.4.5 (2016-04-06)
+------------------
+
+- Add FloatWidget, use with model fields models.FloatField (#433)
+
+- Fix default values in fields (#431, #364)
+
+  Field constructor `default` argument is NOT_PROVIDED instead of None
+  Field clean method checks value against `Field.empty_values` [None, '']
+
+0.4.4 (2016-03-22)
+------------------
+
+- FIX: No static/ when installed via pip #427
+
+- Add total # of imports and total # of updates to import success msg
+
+
+0.4.3 (2016-03-08)
+------------------
+
+- fix MediaStorage does not respect the read_mode parameter (#416)
+
+- Reset SQL sequences when new objects are imported (#59)
+
+- Let Resource rollback if import throws exception (#377)
+
+- Fixes error when a single value is stored in m2m relation field (#177)
+
+- Add support for django.db.models.TimeField (#381)
+
+
+0.4.2 (2015-12-18)
+------------------
+
+- add xlsx import support
+
+
+0.4.1 (2015-12-11)
+------------------
+
+- fix for fields with a dyanmic default callable (#360)
+
+
+0.4.0 (2015-12-02)
+------------------
+
+- Add Django 1.9 support
+
+- Django 1.4 is not supported (#348)
+
+
+0.3.1 (2015-11-20)
+------------------
+
+- FIX: importing csv in python 3
+
+
+0.3 (2015-11-20)
+----------------
+
+- FIX: importing csv UnicodeEncodeError introduced in 0.2.9 (#347)
+
+
+0.2.9 (2015-11-12)
+------------------
+
+- Allow Field.save() relation following (#344)
+
+- Support default values on fields (and models) (#345)
+
+- m2m widget: allow trailing comma (#343)
+
+- Open csv files as text and not binary (#127)
+
+
+0.2.8 (2015-07-29)
+------------------
+
+- use the IntegerWidget for database-fields of type BigIntegerField (#302)
+
+- make datetime timezone aware if USE_TZ is True (#283).
+
+- Fix 0 is interpreted as None in number widgets (#274)
+
 - add possibility to override tmp storage class (#133, #251)
+
+- better error reporting (#259)
 
 
 0.2.7 (2015-05-04)
@@ -26,7 +116,7 @@ Changelog for django-import-export
 
 - added use of get_diff_headers method into import.html template (#158)
 
-- Try to use OrderedDict instead of SortedDict, which is deprecated in 
+- Try to use OrderedDict instead of SortedDict, which is deprecated in
   Django 1.7 (#157)
 
 - fixed #105 unicode import
@@ -49,9 +139,9 @@ Changelog for django-import-export
 
 - Fixed XLS import on python 3. Optimized loop
 
-- Fixed properly skipping row marked as skipped when importing data from 
+- Fixed properly skipping row marked as skipped when importing data from
   the admin interface.
-  
+
 - Allow Resource.export to accept iterables as well as querysets
 
 - Improve error messages
